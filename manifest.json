@@ -1,0 +1,40 @@
+{
+  "name": "Catcher's Log",
+  "short_name": "CatchersLog",
+  "description": "Performance journal and drill library for baseball catchers",
+  "start_url": "/catchers-log/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%23020617'/><rect width='192' height='192' rx='40' fill='url(%23g)'/><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%231e1b4b'/><stop offset='1' stop-color='%230f172a'/></linearGradient></defs><text x='96' y='130' font-size='100' text-anchor='middle' font-family='serif'>⚾</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%23020617'/><rect width='512' height='512' rx='100' fill='url(%23g)'/><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%231e1b4b'/><stop offset='1' stop-color='%230f172a'/></linearGradient></defs><text x='256' y='360' font-size='280' text-anchor='middle' font-family='serif'>⚾</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["sports", "health", "productivity"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "New Game",
+      "short_name": "New Game",
+      "description": "Log a new game",
+      "url": "/catchers-log/?action=new-game"
+    },
+    {
+      "name": "Drill Library",
+      "short_name": "Drills",
+      "description": "Browse drill videos",
+      "url": "/catchers-log/?tab=library"
+    }
+  ]
+}
