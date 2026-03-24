@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Catcher's Log</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#6366f1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Catcher's Log">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="Performance journal and drill library for baseball catchers.">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #020617; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #e2e8f0; }
+  input, textarea, select, button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  * { -webkit-tap-highlight-color: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────
+const SHEET_CSV_URL = "YOUR_GOOGLE_SHEET_CSV_URL_HERE";
+
+const CATEGORIES = [
+  { id:"all",                  label:"All Drills",  icon:"🎬" },
+  { id:"Receiving & Framing",  label:"Receiving",   icon:"🧤" },
+  { id:"Throwing & Pop Time",  label:"Throwing",    icon:"💪" },
+  { id:"Blocking & Footwork",  label:"Blocking",    icon:"🛡️" },
+  { id:"Mindset & Leadership", label:"Mindset",     icon:"🧠" },
+];
+
+const CAT_COLORS = {
+  "Receiving & Framing":  "#6366f1",
+  "Throwing & Pop Time":  "#ef4444",
+  "Blocking & Footwork":  "#f59e0b",
+  "Mindset & Leadership": "#10b981",
+};
+
+const ratingLabels = ["","Rough","Below Avg","Average","Good","Elite"];
+const ratingColors = ["","#e74c3c","#e67e22","#f1c40f","#2ecc71","#27ae60"];
+
+// ── HELPERS ─────────────────────────────────────────────────────────────────
+function getYouTubeId(url="") {
+  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(",").map(h=>h.replace(/"/g,"").trim().toLowerCase());
+  return lines.slice(1).map(line=>{
+    const cols=[]; let cur="",inQ=false;
+    for(const ch of line){
+      if(ch==='"'){inQ=!inQ;}
+      else if(ch===","&&!inQ){cols.push(cur.trim());cur="";}
+      else cur+=ch;
+    }
+    cols.push(cur.trim());
+    const obj={};
+    headers.forEach((h,i)=>{obj[h]=(cols[i]||"").replace(/^"|"$/g,"");});
+    return obj;
+  }).filter(r=>r.url||r["youtube url"]||r.youtube);
+}
+
+const DEMO_DRILLS = [
+  {title:"Quiet Hands Receiving",       category:"Receiving & Framing",  description:"Soft, relaxed hands as you receive each pitch. Let the ball travel deep into the zone.",                    url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"4:12"},
+  {title:"Framing the Low Strike",      category:"Receiving & Framing",  description:"Work the bottom of the zone — catch below and pull slightly back toward the strike zone.",                  url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"3:45"},
+  {title:"Pop Time Footwork",           category:"Throwing & Pop Time",  description:"Complete breakdown of footwork from stance to release point for max pop time.",                             url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"6:20"},
+  {title:"Bare Hand Exchange Drill",    category:"Throwing & Pop Time",  description:"Improve glove-to-hand exchange speed with this bare-hand isolation drill.",                                 url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"5:05"},
+  {title:"Blocking the Curveball",      category:"Blocking & Footwork",  description:"Body positioning and drop technique for blocking breaking balls in the dirt.",                               url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"7:30"},
+  {title:"One Knee Blocking Stance",    category:"Blocking & Footwork",  description:"How to get into and execute blocks from the one-knee stance effectively.",                                  url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"4:55"},
+  {title:"Reset Routine",               category:"Mindset & Leadership", description:"Build a consistent mental reset between pitches so every pitch starts fresh.",                              url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"8:10"},
+  {title:"Calling Pitches With Confidence", category:"Mindset & Leadership", description:"How to build trust with your pitchers and own the pitch-calling process.",                             url:"https://www.youtube.com/watch?v=dQw4w9WgXcQ", duration:"9:00"},
+];
+
+const defaultGame = () => ({
+  id: Date.now(),
+  date: new Date().toISOString().split("T")[0],
+  opponent:"", location:"Home", weather:"", umpire:"",
+  pitchers:[{name:"",innings:"",strikes:"",balls:"",pct:""}],
+  stance:"",
+  receiving:{lowBall:0,highBall:0,gloveSide:0,throwingSide:0},
+  prePitchLoad:"",
+  caughtThroughBall:null, playingDefense:null, positiveFramingMomentum:null,
+  pitchProcessNotes:"",
+  pitchesReceived:"", passedBalls:"0", stolenAttempts:"0",
+  stolenCaught:"0", pickoffs:"0", wildPitchesBlocked:"0",
+  atBats:[{result:"",pitchSeen:"",count:"",notes:""}],
+  gamePrep:"", communicationRating:3, focusRating:3, confidenceRating:3,
+  bigMoment:"", adjustmentMade:"", whatWorked:"", improve:"",
+  mentalNote:"", overallRating:3,
+});
+
+// ── UI PRIMITIVES ────────────────────────────────────────────────────────────
+function StarRating({value,onChange,label}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+      <span style={{fontSize:11,color:"#94a3b8",textTransform:"uppercase",letterSpacing:1}}>{label}</span>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+        {[1,2,3,4,5].map(n=>(
+          <button key={n} onClick={()=>onChange(n)} style={{width:32,height:32,borderRadius:6,border:"none",cursor:"pointer",background:n<=value?ratingColors[value]:"#1e293b",color:n<=value?"#fff":"#475569",fontSize:14,fontWeight:"bold",transition:"all 0.15s"}}>{n}</button>
+        ))}
+        <span style={{alignSelf:"center",fontSize:12,color:ratingColors[value],fontWeight:600,marginLeft:4}}>{ratingLabels[value]}</span>
+      </div>
+    </div>
+  );
+}
+
+function Section({title,icon,children}){
+  const [open,setOpen]=useState(true);
+  return(
+    <div style={{background:"#0f172a",border:"1px solid #1e293b",borderRadius:12,overflow:"hidden",marginBottom:16}}>
+      <button onClick={()=>setOpen(!open)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",background:"transparent",border:"none",cursor:"pointer",color:"#e2e8f0"}}>
+        <span style={{display:"flex",alignItems:"center",gap:10,fontSize:15,fontWeight:700}}><span style={{fontSize:20}}>{icon}</span>{title}</span>
+        <span style={{color:"#475569",fontSize:18}}>{open?"▲":"▼"}</span>
+      </button>
+      {open&&<div style={{padding:"4px 20px 20px"}}>{children}</div>}
+    </div>
+  );
+}
+
+function Inp({label,value,onChange,type="text",placeholder=""}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+      {label&&<label style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>{label}</label>}
+      <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+        style={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,color:"#e2e8f0",padding:"9px 12px",fontSize:14,outline:"none",fontFamily:"inherit"}}/>
+    </div>
+  );
+}
+
+function Txta({label,value,onChange,placeholder="",rows=3}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+      {label&&<label style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>{label}</label>}
+      <textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows}
+        style={{background:"#1e293b",border:"1px solid #334155",borderRadius:8,color:"#e2e8f0",padding:"9px 12px",fontSize:14,outline:"none",fontFamily:"inherit",resize:"vertical",lineHeight:1.5}}/>
+    </div>
+  );
+}
+
+function StatBox({label,value,onChange,small=false}){
+  return(
+    <div style={{background:"#1e293b",borderRadius:10,padding:small?"10px 12px":"14px 16px",display:"flex",flexDirection:"column",gap:6,border:"1px solid #334155"}}>
+      <span style={{fontSize:10,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>{label}</span>
+      <input type="number" value={value} onChange={e=>onChange(e.target.value)} min="0"
+        style={{background:"transparent",border:"none",color:"#f8fafc",fontSize:small?22:28,fontWeight:800,outline:"none",fontFamily:"inherit",width:"100%"}}/>
+    </div>
+  );
+}
+
+// ── VIDEO MODAL ──────────────────────────────────────────────────────────────
+function VideoModal({drill,onClose}){
+  const videoId=getYouTubeId(drill.url||drill["youtube url"]||drill.youtube||"");
+  const catColor=CAT_COLORS[drill.category]||"#6366f1";
+  useEffect(()=>{
+    const h=e=>{if(e.key==="Escape")onClose();};
+    window.addEventListener("keydown",h);
+    return()=>window.removeEventListener("keydown",h);
+  },[]);
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#0f172a",borderRadius:16,overflow:"hidden",width:"100%",maxWidth:680,border:"1px solid #1e293b",boxShadow:"0 25px 60px rgba(0,0,0,0.6)"}}>
+        {videoId
+          ?<div style={{position:"relative",paddingTop:"56.25%",background:"#000"}}>
+            <iframe src={`https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0`}
+              style={{position:"absolute",inset:0,width:"100%",height:"100%",border:"none"}}
+              allow="autoplay; encrypted-media" allowFullScreen title={drill.title}/>
+           </div>
+          :<div style={{height:180,background:"#1e293b",display:"flex",alignItems:"center",justifyContent:"center",color:"#475569"}}>Invalid YouTube URL</div>
+        }
+        <div style={{padding:"16px 20px 20px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:8}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:800,color:"#f8fafc",marginBottom:6}}>{drill.title}</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,padding:"3px 10px",borderRadius:20,fontWeight:600,background:catColor+"20",color:catColor,border:`1px solid ${catColor}50`}}>{drill.category}</span>
+                {drill.duration&&<span style={{fontSize:11,color:"#64748b",background:"#1e293b",padding:"3px 10px",borderRadius:20}}>⏱ {drill.duration}</span>}
+              </div>
+            </div>
+            <button onClick={onClose} style={{background:"#1e293b",border:"none",color:"#94a3b8",cursor:"pointer",borderRadius:8,padding:"7px 14px",fontSize:13,flexShrink:0}}>✕ Close</button>
+          </div>
+          {drill.description&&<p style={{margin:0,fontSize:13,color:"#94a3b8",lineHeight:1.6}}>{drill.description}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DRILL CARD ───────────────────────────────────────────────────────────────
+function DrillCard({drill,onPlay}){
+  const videoId=getYouTubeId(drill.url||drill["youtube url"]||drill.youtube||"");
+  const thumb=videoId?`https://img.youtube.com/vi/${videoId}/mqdefault.jpg`:null;
+  const catColor=CAT_COLORS[drill.category]||"#6366f1";
+  const [hov,setHov]=useState(false);
+  return(
+    <div onClick={onPlay} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:"#0f172a",border:`1px solid ${hov?catColor:"#1e293b"}`,borderRadius:12,overflow:"hidden",cursor:"pointer",transition:"all 0.15s",transform:hov?"translateY(-2px)":"none"}}>
+      <div style={{position:"relative",paddingTop:"56.25%",background:"#1e293b"}}>
+        {thumb?<img src={thumb} alt={drill.title} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+              :<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,color:"#334155"}}>▶</div>}
+        <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.25)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{width:42,height:42,borderRadius:"50%",background:"rgba(255,255,255,0.88)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>▶</div>
+        </div>
+        {drill.duration&&<div style={{position:"absolute",bottom:7,right:8,background:"rgba(0,0,0,0.8)",color:"#fff",fontSize:10,padding:"2px 6px",borderRadius:4}}>{drill.duration}</div>}
+      </div>
+      <div style={{padding:"11px 13px 13px"}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#f1f5f9",marginBottom:4,lineHeight:1.3}}>{drill.title}</div>
+        {drill.description&&<div style={{fontSize:11,color:"#64748b",lineHeight:1.4,marginBottom:7,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{drill.description}</div>}
+        <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:600,background:catColor+"20",color:catColor,border:`1px solid ${catColor}40`}}>{drill.category}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── VIDEO LIBRARY ────────────────────────────────────────────────────────────
+function VideoLibrary(){
+  const [drills,setDrills]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState(null);
+  const [activeCat,setActiveCat]=useState("all");
+  const [search,setSearch]=useState("");
+  const [activeDrill,setActiveDrill]=useState(null);
+  const isDemo=SHEET_CSV_URL==="YOUR_GOOGLE_SHEET_CSV_URL_HERE";
+
+  useEffect(()=>{
+    if(isDemo){setDrills(DEMO_DRILLS);setLoading(false);return;}
+    fetch(SHEET_CSV_URL)
+      .then(r=>{if(!r.ok)throw new Error("Could not load sheet.");return r.text();})
+      .then(text=>{const p=parseCSV(text);if(!p.length)throw new Error("No videos found. Check column headers.");setDrills(p);setLoading(false);})
+      .catch(e=>{setError(e.message);setLoading(false);});
+  },[]);
+
+  const filtered=drills.filter(d=>{
+    const mc=activeCat==="all"||d.category===activeCat;
+    const ms=!search||d.title?.toLowerCase().includes(search.toLowerCase())||d.description?.toLowerCase().includes(search.toLowerCase());
+    return mc&&ms;
+  });
+
+  return(
+    <div>
+      {isDemo&&(
+        <div style={{background:"#1c1917",border:"1px solid #78350f",borderRadius:12,padding:"14px 16px",marginBottom:20}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#fbbf24",marginBottom:6}}>📋 Connect Your Google Sheet to go live</div>
+          <div style={{fontSize:11,color:"#78716c",lineHeight:1.8}}>
+            Sheet headers: <code style={{color:"#fcd34d",background:"#292524",padding:"1px 5px",borderRadius:3}}>Category, Title, Description, URL, Duration</code><br/>
+            File → Share → Publish to web → CSV → copy link → paste into SHEET_CSV_URL at top of file
+          </div>
+          <div style={{marginTop:8,fontSize:11,color:"#d97706",fontStyle:"italic"}}>↓ Demo drills shown below</div>
+        </div>
+      )}
+
+      <div style={{position:"relative",marginBottom:12}}>
+        <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:14,color:"#475569"}}>🔍</span>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search drills..."
+          style={{width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:10,color:"#e2e8f0",padding:"10px 12px 10px 38px",fontSize:14,outline:"none",fontFamily:"inherit"}}/>
+      </div>
+
+      <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:6,marginBottom:16}}>
+        {CATEGORIES.map(cat=>{
+          const count=cat.id==="all"?drills.length:drills.filter(d=>d.category===cat.id).length;
+          const active=activeCat===cat.id;
+          return(
+            <button key={cat.id} onClick={()=>setActiveCat(cat.id)}
+              style={{padding:"7px 13px",borderRadius:20,border:"1.5px solid",whiteSpace:"nowrap",cursor:"pointer",fontSize:12,fontWeight:600,transition:"all 0.15s",display:"flex",alignItems:"center",gap:5,
+                borderColor:active?"#6366f1":"#1e293b",background:active?"#1e1b4b":"#0f172a",color:active?"#a5b4fc":"#64748b"}}>
+              <span>{cat.icon}</span><span>{cat.label}</span>
+              {count>0&&<span style={{fontSize:10,background:active?"#4338ca":"#1e293b",color:active?"#c7d2fe":"#475569",borderRadius:20,padding:"1px 6px"}}>{count}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {loading&&<div style={{textAlign:"center",padding:"60px 0",color:"#475569"}}>Loading drills...</div>}
+      {error&&<div style={{background:"#450a0a",border:"1px solid #dc2626",borderRadius:12,padding:20,color:"#fca5a5"}}><b>⚠️ Error:</b> {error}</div>}
+      {!loading&&!error&&(
+        <>
+          {filtered.length===0&&<div style={{textAlign:"center",padding:"60px 20px",color:"#475569"}}><div style={{fontSize:36,marginBottom:12}}>🎬</div>No drills found{search?` for "${search}"`:""}.</div>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            {filtered.map((d,i)=><DrillCard key={i} drill={d} onPlay={()=>setActiveDrill(d)}/>)}
+          </div>
+        </>
+      )}
+      {activeDrill&&<VideoModal drill={activeDrill} onClose={()=>setActiveDrill(null)}/>}
+    </div>
+  );
+}
+
+// ── GAME FORM ────────────────────────────────────────────────────────────────
+function GameForm({game,onChange}){
+  const upd=(k,v)=>onChange({...game,[k]:v});
+  const csb=game.stolenAttempts>0?Math.round((game.stolenCaught/game.stolenAttempts)*100):0;
+
+  return(
+    <div>
+      <Section title="Game Info" icon="⚾">
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Inp label="Date" type="date" value={game.date} onChange={v=>upd("date",v)}/>
+          <Inp label="Opponent" value={game.opponent} onChange={v=>upd("opponent",v)} placeholder="Team name"/>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            <label style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>Location</label>
+            <div style={{display:"flex",gap:8}}>
+              {["Home","Away","Neutral"].map(loc=>(
+                <button key={loc} onClick={()=>upd("location",loc)} style={{flex:1,padding:"9px 4px",borderRadius:8,fontSize:13,fontWeight:600,border:"1px solid",borderColor:game.location===loc?"#3b82f6":"#334155",background:game.location===loc?"#1d4ed8":"#1e293b",color:game.location===loc?"#fff":"#94a3b8",cursor:"pointer"}}>{loc}</button>
+              ))}
+            </div>
+          </div>
+          <Inp label="Weather" value={game.weather} onChange={v=>upd("weather",v)} placeholder="Sunny, 72°F..."/>
+        </div>
+      </Section>
+
+      <Section title="Catching Stats" icon="🥇">
+        {/* Stance */}
+        <div style={{marginBottom:16}}>
+          <span style={{fontSize:11,color:"#94a3b8",textTransform:"uppercase",letterSpacing:1,display:"block",marginBottom:8}}>Primary Stance Used</span>
+          <div style={{display:"flex",gap:10}}>
+            {[
+              {value:"conventional",label:"Conventional",   sub:"Two feet down"},
+              {value:"right-knee",  label:"Right Knee Down",sub:"Right knee down"},
+              {value:"left-knee",   label:"Left Knee Down", sub:"Left knee down"},
+            ].map(s=>(
+              <button key={s.value} onClick={()=>upd("stance",game.stance===s.value?"":s.value)}
+                style={{flex:1,padding:"10px 8px",borderRadius:10,border:"1.5px solid",textAlign:"center",cursor:"pointer",transition:"all 0.15s",borderColor:game.stance===s.value?"#6366f1":"#334155",background:game.stance===s.value?"#1e1b4b":"#1e293b"}}>
+                <div style={{fontSize:20,marginBottom:4}}>{s.value==="conventional"?"🦵🦵":s.value==="right-knee"?"🦵⬇️":"⬇️🦵"}</div>
+                <div style={{fontSize:11,fontWeight:700,color:game.stance===s.value?"#c7d2fe":"#94a3b8"}}>{s.label}</div>
+                <div style={{fontSize:10,color:game.stance===s.value?"#818cf8":"#475569",marginTop:2}}>{s.sub}</div>
+                <div style={{width:16,height:16,borderRadius:"50%",border:"2px solid",margin:"8px auto 0",borderColor:game.stance===s.value?"#6366f1":"#475569",background:game.stance===s.value?"#6366f1":"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {game.stance===s.value&&<div style={{width:7,height:7,borderRadius:"50%",background:"#fff"}}/>}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Receiving Checkpoints */}
+        <div style={{marginBottom:16}}>
+          <span style={{fontSize:11,color:"#94a3b8",textTransform:"uppercase",letterSpacing:1,display:"block",marginBottom:8}}>Receiving Checkpoints</span>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[
+              {key:"lowBall",     label:"Low Ball",      desc:"At / below knees",       icon:"⬇️"},
+              {key:"highBall",    label:"High Ball",     desc:"At / above letters",      icon:"⬆️"},
+              {key:"gloveSide",   label:"Glove Side",    desc:"Away from throwing hand", icon:"🧤"},
+              {key:"throwingSide",label:"Throwing Side", desc:"Toward throwing hand",    icon:"💪"},
+            ].map(zone=>{
+              const rl=["—","Poor","Fair","Good","Great"];
+              const rc=["#475569","#e74c3c","#e67e22","#2ecc71","#27ae60"];
+              const val=game.receiving[zone.key]||0;
+              return(
+                <div key={zone.key} style={{background:"#1e293b",borderRadius:10,padding:"12px 14px",border:`1.5px solid ${val>0?rc[val]+"60":"#334155"}`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                    <span style={{fontSize:16}}>{zone.icon}</span>
+                    <div><div style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{zone.label}</div><div style={{fontSize:10,color:"#64748b"}}>{zone.desc}</div></div>
+                  </div>
+                  <div style={{display:"flex",gap:4}}>
+                    {[1,2,3,4].map(n=>(
+                      <button key={n} onClick={()=>upd("receiving",{...game.receiving,[zone.key]:game.receiving[zone.key]===n?0:n})}
+                        style={{flex:1,padding:"5px 0",borderRadius:6,border:"none",cursor:"pointer",background:val>=n?rc[val]:"#0f172a",color:val>=n?"#fff":"#334155",fontSize:10,fontWeight:700}}>{n}</button>
+                    ))}
+                  </div>
+                  {val>0&&<div style={{fontSize:10,color:rc[val],marginTop:5,fontWeight:600,textAlign:"center"}}>{rl[val]}</div>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",justifyContent:"center",gap:12,marginTop:8,fontSize:10}}>
+            <span style={{color:"#e74c3c"}}>1=Poor</span><span style={{color:"#e67e22"}}>2=Fair</span><span style={{color:"#2ecc71"}}>3=Good</span><span style={{color:"#27ae60"}}>4=Great</span>
+          </div>
+        </div>
+
+        {/* Pre-Pitch Process */}
+        <div style={{marginBottom:16}}>
+          <span style={{fontSize:11,color:"#94a3b8",textTransform:"uppercase",letterSpacing:1,display:"block",marginBottom:10}}>Pre-Pitch Process</span>
+          <div style={{background:"#1e293b",borderRadius:10,padding:"12px 14px",border:"1.5px solid #334155",marginBottom:8}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8}}>
+              <span style={{fontSize:18,lineHeight:1.2}}>⚡</span>
+              <div><div style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>Pre-Pitch Load</div><div style={{fontSize:10,color:"#64748b"}}>Your setup / load cue before each pitch</div></div>
+            </div>
+            <input value={game.prePitchLoad} onChange={e=>upd("prePitchLoad",e.target.value)} placeholder="e.g. Soft hands, weight forward, quiet feet..."
+              style={{width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",padding:"8px 11px",fontSize:13,outline:"none",fontFamily:"inherit"}}/>
+          </div>
+          {[
+            {key:"caughtThroughBall",      icon:"🎯",label:"Caught Through the Ball",    desc:"Received offensively — attacked the ball, didn't just catch it"},
+            {key:"playingDefense",          icon:"🛡️",label:"Felt Like Playing Defense",  desc:"Reactive / passive rather than assertive behind the plate"},
+            {key:"positiveFramingMomentum", icon:"🔄",label:"Positive Framing Momentum",  desc:"Caught with momentum moving back toward the strike zone"},
+          ].map(item=>{
+            const val=game[item.key];
+            const opts=[
+              {v:"yes",       label:"Yes",       color:"#16a34a",bg:"#14532d"},
+              {v:"sometimes", label:"Sometimes", color:"#d97706",bg:"#451a03"},
+              {v:"no",        label:"No",        color:"#dc2626",bg:"#450a0a"},
+            ];
+            return(
+              <div key={item.key} style={{background:"#1e293b",borderRadius:10,padding:"12px 14px",marginBottom:8,border:`1.5px solid ${val==="yes"?"#16a34a50":val==="no"?"#dc262650":val==="sometimes"?"#d9770650":"#334155"}`}}>
+                <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
+                  <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                    <span style={{fontSize:18,lineHeight:1.2}}>{item.icon}</span>
+                    <div><div style={{fontSize:12,fontWeight:700,color:"#e2e8f0"}}>{item.label}</div><div style={{fontSize:10,color:"#64748b",marginTop:2,lineHeight:1.4}}>{item.desc}</div></div>
+                  </div>
+                  <div style={{display:"flex",gap:5,flexShrink:0}}>
+                    {opts.map(o=>(
+                      <button key={o.v} onClick={()=>upd(item.key,val===o.v?null:o.v)} style={{padding:"5px 9px",borderRadius:7,border:"1.5px solid",cursor:"pointer",borderColor:val===o.v?o.color:"#334155",background:val===o.v?o.bg:"#0f172a",color:val===o.v?o.color:"#475569",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{o.label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          <div style={{background:"#1e293b",borderRadius:10,padding:"12px 14px",border:"1.5px solid #334155"}}>
+            <div style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Process Notes</div>
+            <textarea value={game.pitchProcessNotes} onChange={e=>upd("pitchProcessNotes",e.target.value)} rows={2} placeholder="Patterns, moments, or reminders about your receiving process..."
+              style={{width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",padding:"8px 11px",fontSize:13,outline:"none",fontFamily:"inherit",resize:"vertical",lineHeight:1.5}}/>
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+          <StatBox label="Pitches Rcvd" value={game.pitchesReceived} onChange={v=>upd("pitchesReceived",v)}/>
+          <StatBox label="Stolen Att." value={game.stolenAttempts} onChange={v=>upd("stolenAttempts",v)}/>
+          <StatBox label="Caught (CS)" value={game.stolenCaught} onChange={v=>upd("stolenCaught",v)}/>
+          <StatBox label="Pickoffs" value={game.pickoffs} onChange={v=>upd("pickoffs",v)} small/>
+          <StatBox label="Passed Balls" value={game.passedBalls} onChange={v=>upd("passedBalls",v)} small/>
+          <StatBox label="WP Blocked" value={game.wildPitchesBlocked} onChange={v=>upd("wildPitchesBlocked",v)} small/>
+        </div>
+        {game.stolenAttempts>0&&(
+          <div style={{background:"#162032",borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,border:"1px solid #1e3a5f"}}>
+            <span style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>CS%</span>
+            <span style={{fontSize:32,fontWeight:900,color:csb>=33?"#2ecc71":csb>=20?"#f1c40f":"#e74c3c"}}>{csb}%</span>
+            <span style={{fontSize:12,color:"#64748b"}}>{game.stolenCaught}/{game.stolenAttempts} runners caught</span>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Pitcher Management" icon="🎯">
+        {game.pitchers.map((p,i)=>(
+          <div key={i} style={{background:"#1e293b",borderRadius:10,padding:14,marginBottom:10,border:"1px solid #334155"}}>
+            <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:10}}>
+              <Inp label="Pitcher" value={p.name} onChange={v=>{const ps=[...game.pitchers];ps[i]={...p,name:v};upd("pitchers",ps);}} placeholder="Name/#"/>
+              <Inp label="IP" value={p.innings} onChange={v=>{const ps=[...game.pitchers];ps[i]={...p,innings:v};upd("pitchers",ps);}} placeholder="5.2"/>
+              <Inp label="Str." value={p.strikes} onChange={v=>{const ps=[...game.pitchers];ps[i]={...p,strikes:v};upd("pitchers",ps);}} type="number"/>
+              <Inp label="Balls" value={p.balls} onChange={v=>{const ps=[...game.pitchers];ps[i]={...p,balls:v};upd("pitchers",ps);}} type="number"/>
+            </div>
+            <div style={{marginTop:10}}>
+              <Txta label="Pitcher Notes" value={p.pct} onChange={v=>{const ps=[...game.pitchers];ps[i]={...p,pct:v};upd("pitchers",ps);}} rows={2} placeholder="What was working? Patterns? Adjustments?"/>
+            </div>
+          </div>
+        ))}
+        <button onClick={()=>upd("pitchers",[...game.pitchers,{name:"",innings:"",strikes:"",balls:"",pct:""}])}
+          style={{padding:"8px 16px",borderRadius:8,border:"1px dashed #334155",background:"transparent",color:"#64748b",cursor:"pointer",fontSize:13}}>+ Add Pitcher</button>
+      </Section>
+
+      <Section title="At Bats" icon="🏏">
+        {game.atBats.map((ab,i)=>(
+          <div key={i} style={{background:"#1e293b",borderRadius:10,padding:14,marginBottom:10,border:"1px solid #334155",display:"grid",gridTemplateColumns:"1fr 1fr 1fr 2fr",gap:10}}>
+            <div>
+              <label style={{fontSize:10,color:"#64748b",textTransform:"uppercase",letterSpacing:1,display:"block",marginBottom:4}}>AB {i+1}</label>
+              <select value={ab.result} onChange={e=>{const abs=[...game.atBats];abs[i]={...ab,result:e.target.value};upd("atBats",abs);}}
+                style={{background:"#0f172a",border:"1px solid #334155",borderRadius:8,color:"#e2e8f0",padding:"9px 10px",fontSize:13,width:"100%",fontFamily:"inherit"}}>
+                <option value="">—</option>
+                {["1B","2B","3B","HR","BB","HBP","K","K(L)","GO","FO","LO","DP","FC","E","SAC","SF"].map(r=><option key={r}>{r}</option>)}
+              </select>
+            </div>
+            <Inp label="Last Pitch" value={ab.pitchSeen} onChange={v=>{const abs=[...game.atBats];abs[i]={...ab,pitchSeen:v};upd("atBats",abs);}} placeholder="FB away..."/>
+            <Inp label="Count" value={ab.count} onChange={v=>{const abs=[...game.atBats];abs[i]={...ab,count:v};upd("atBats",abs);}} placeholder="3-2"/>
+            <Inp label="Notes" value={ab.notes} onChange={v=>{const abs=[...game.atBats];abs[i]={...ab,notes:v};upd("atBats",abs);}} placeholder="Approach..."/>
+          </div>
+        ))}
+        <button onClick={()=>upd("atBats",[...game.atBats,{result:"",pitchSeen:"",count:"",notes:""}])}
+          style={{padding:"8px 16px",borderRadius:8,border:"1px dashed #334155",background:"transparent",color:"#64748b",cursor:"pointer",fontSize:13}}>+ Add At Bat</button>
+      </Section>
+
+      <Section title="Mindset & Performance" icon="🧠">
+        <div style={{display:"grid",gap:16}}>
+          <Txta label="Pre-game prep & scouting notes" value={game.gamePrep} onChange={v=>upd("gamePrep",v)} placeholder="What did I study? Game plan?" rows={2}/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
+            <StarRating label="Communication" value={game.communicationRating} onChange={v=>upd("communicationRating",v)}/>
+            <StarRating label="Focus" value={game.focusRating} onChange={v=>upd("focusRating",v)}/>
+            <StarRating label="Confidence" value={game.confidenceRating} onChange={v=>upd("confidenceRating",v)}/>
+          </div>
+          <Txta label="Biggest moment / key play" value={game.bigMoment} onChange={v=>upd("bigMoment",v)} placeholder="A defining moment this game..." rows={2}/>
+          <Txta label="In-game adjustment I made" value={game.adjustmentMade} onChange={v=>upd("adjustmentMade",v)} placeholder="How did I adapt?" rows={2}/>
+        </div>
+      </Section>
+
+      <Section title="Game Reflection" icon="📓">
+        <div style={{display:"grid",gap:14}}>
+          <Txta label="✅ What worked well" value={game.whatWorked} onChange={v=>upd("whatWorked",v)} placeholder="Behind the plate, at the plate, leadership..." rows={2}/>
+          <Txta label="📈 Area to improve" value={game.improve} onChange={v=>upd("improve",v)} placeholder="Be specific — what will I practice?" rows={2}/>
+          <Txta label="💭 Mental takeaway" value={game.mentalNote} onChange={v=>upd("mentalNote",v)} placeholder="One thing to carry forward..." rows={2}/>
+          <StarRating label="Overall Game Rating" value={game.overallRating} onChange={v=>upd("overallRating",v)}/>
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+// ── GAME CARD ────────────────────────────────────────────────────────────────
+function GameCard({game,onSelect,onDelete}){
+  const csb=game.stolenAttempts>0?Math.round((game.stolenCaught/game.stolenAttempts)*100):null;
+  const [hov,setHov]=useState(false);
+  return(
+    <div onClick={onSelect} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:"#0f172a",border:`1px solid ${hov?"#3b82f6":"#1e293b"}`,borderRadius:12,padding:16,cursor:"pointer",transition:"all 0.15s",display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+      <div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+          <span style={{fontSize:16,fontWeight:800,color:"#f8fafc"}}>vs {game.opponent||"Unnamed Game"}</span>
+          <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,background:game.location==="Home"?"#1d4ed820":"#7c3aed20",color:game.location==="Home"?"#60a5fa":"#a78bfa",border:`1px solid ${game.location==="Home"?"#1d4ed8":"#7c3aed"}`}}>{game.location}</span>
+        </div>
+        <div style={{fontSize:12,color:"#64748b",marginBottom:8}}>{game.date}</div>
+        <div style={{display:"flex",gap:16,fontSize:13}}>
+          {game.pitchesReceived&&<span style={{color:"#94a3b8"}}>⚾ {game.pitchesReceived} pitches</span>}
+          {csb!==null&&<span style={{color:csb>=33?"#2ecc71":"#e74c3c"}}>🎯 {csb}% CS</span>}
+          <span style={{color:"#94a3b8"}}>{"⭐".repeat(game.overallRating)}</span>
+        </div>
+      </div>
+      <button onClick={e=>{e.stopPropagation();onDelete();}} style={{background:"transparent",border:"none",color:"#334155",cursor:"pointer",fontSize:18,padding:4}}>×</button>
+    </div>
+  );
+}
+
+// ── BOTTOM NAV ───────────────────────────────────────────────────────────────
+function BottomNav({tab,setTab}){
+  return(
+    <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:720,background:"#0f172a",borderTop:"1px solid #1e293b",display:"flex",zIndex:200}}>
+      {[{id:"games",icon:"📋",label:"Games"},{id:"library",icon:"🎬",label:"Drills"},{id:"stats",icon:"📊",label:"Stats"}].map(t=>(
+        <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"12px 0 14px",border:"none",background:"transparent",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,borderTop:`2px solid ${tab===t.id?"#6366f1":"transparent"}`,transition:"all 0.15s"}}>
+          <span style={{fontSize:20}}>{t.icon}</span>
+          <span style={{fontSize:10,fontWeight:600,color:tab===t.id?"#a5b4fc":"#475569",letterSpacing:0.5,textTransform:"uppercase"}}>{t.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── ROOT ─────────────────────────────────────────────────────────────────────
+function App(){
+  const [games,setGames]=useState([]);
+  const [currentGame,setCurrentGame]=useState(null);
+  const [tab,setTab]=useState("games");
+  const [gameView,setGameView]=useState("list");
+
+  const saveGame=game=>setGames(prev=>{
+    const idx=prev.findIndex(g=>g.id===game.id);
+    if(idx>=0){const n=[...prev];n[idx]=game;return n;}
+    return[game,...prev];
+  });
+
+  const totalPitches =games.reduce((a,g)=>a+(parseInt(g.pitchesReceived)||0),0);
+  const totalAttempts=games.reduce((a,g)=>a+(parseInt(g.stolenAttempts)||0),0);
+  const totalCaught  =games.reduce((a,g)=>a+(parseInt(g.stolenCaught)||0),0);
+  const avgRating=games.length?(games.reduce((a,g)=>a+g.overallRating,0)/games.length).toFixed(1):"—";
+
+  const headerTitle=()=>{
+    if(tab==="library")return"Drill Library";
+    if(tab==="stats")return"My Stats";
+    if(gameView==="form"&&currentGame)return currentGame.opponent?`vs ${currentGame.opponent}`:"New Game";
+    return"Performance Journal";
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:"#020617",color:"#e2e8f0",fontFamily:"Georgia, serif",maxWidth:720,margin:"0 auto",paddingBottom:80}}>
+
+      {/* Header */}
+      <div style={{background:"linear-gradient(135deg,#0f172a 0%,#1e1b4b 100%)",padding:"24px 20px 18px",borderBottom:"1px solid #1e293b",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:10,letterSpacing:3,color:"#6366f1",textTransform:"uppercase",marginBottom:3}}>⚾ Catcher's Log</div>
+            <h1 style={{margin:0,fontSize:22,fontWeight:900,color:"#f8fafc",letterSpacing:-0.5}}>{headerTitle()}</h1>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {tab==="games"&&gameView==="list"&&(
+              <button onClick={()=>{setCurrentGame(defaultGame());setGameView("form");}}
+                style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#2563eb",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>+ New Game</button>
+            )}
+            {tab==="games"&&gameView==="form"&&(
+              <>
+                <button onClick={()=>setGameView("list")} style={{padding:"8px 14px",borderRadius:8,border:"1px solid #334155",background:"#1e293b",color:"#94a3b8",cursor:"pointer",fontSize:13}}>← Back</button>
+                <button onClick={()=>{saveGame(currentGame);setGameView("list");}} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",cursor:"pointer",fontSize:13,fontWeight:700}}>Save ✓</button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{padding:"20px 16px"}}>
+        {tab==="games"&&gameView==="list"&&(
+          games.length===0
+            ?<div style={{textAlign:"center",padding:"80px 20px",color:"#475569"}}>
+               <div style={{fontSize:64,marginBottom:16}}>⚾</div>
+               <div style={{fontSize:20,fontWeight:700,color:"#64748b",marginBottom:8}}>No games logged yet</div>
+               <div style={{fontSize:14,color:"#334155"}}>Start tracking your performance behind the plate</div>
+             </div>
+            :<div style={{display:"flex",flexDirection:"column",gap:10}}>
+               {games.map(g=><GameCard key={g.id} game={g} onSelect={()=>{setCurrentGame(g);setGameView("form");}} onDelete={()=>setGames(prev=>prev.filter(x=>x.id!==g.id))}/>)}
+             </div>
+        )}
+        {tab==="games"&&gameView==="form"&&currentGame&&<GameForm game={currentGame} onChange={setCurrentGame}/>}
+        {tab==="library"&&<VideoLibrary/>}
+        {tab==="stats"&&(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+              {[
+                {label:"Games Logged",  val:games.length,                                                                                           color:"#6366f1"},
+                {label:"Total Pitches", val:totalPitches.toLocaleString(),                                                                          color:"#3b82f6"},
+                {label:`CS% (${totalCaught}/${totalAttempts})`,val:totalAttempts>0?`${Math.round(totalCaught/totalAttempts*100)}%`:"—",             color:totalAttempts>0&&totalCaught/totalAttempts>=0.33?"#2ecc71":"#e74c3c"},
+                {label:"Avg Rating",    val:avgRating,                                                                                              color:"#f59e0b"},
+              ].map(s=>(
+                <div key={s.label} style={{background:"#0f172a",borderRadius:12,padding:20,border:"1px solid #1e293b"}}>
+                  <div style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>{s.label}</div>
+                  <div style={{fontSize:36,fontWeight:900,color:s.color}}>{s.val}</div>
+                </div>
+              ))}
+            </div>
+            {games.length>0?(
+              <div style={{background:"#0f172a",borderRadius:12,padding:20,border:"1px solid #1e293b"}}>
+                <div style={{fontSize:13,fontWeight:700,color:"#94a3b8",marginBottom:14,textTransform:"uppercase",letterSpacing:1}}>Game Ratings Over Time</div>
+                <div style={{display:"flex",alignItems:"flex-end",gap:8,height:80}}>
+                  {[...games].reverse().map(g=>(
+                    <div key={g.id} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                      <div style={{width:"100%",background:ratingColors[g.overallRating],borderRadius:4,height:g.overallRating*14,transition:"height 0.3s"}}/>
+                      <span style={{fontSize:9,color:"#475569"}}>{g.date?.slice(5)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ):(
+              <div style={{textAlign:"center",padding:"60px 20px",color:"#475569"}}>
+                <div style={{fontSize:48,marginBottom:12}}>📊</div>
+                <div>Log some games to see your stats</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <BottomNav tab={tab} setTab={t=>{setTab(t);if(t!=="games")setGameView("list");}}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+
+<script>
+// Service Worker registration
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function() {
+    navigator.serviceWorker.register("sw.js")
+      .then(function(reg) { console.log("SW registered"); })
+      .catch(function(err) { console.log("SW error:", err); });
+  });
+}
+
+// Android/Chrome install prompt
+var deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", function(e) {
+  e.preventDefault();
+  deferredPrompt = e;
+  setTimeout(function() {
+    var b = document.getElementById("pwa-banner");
+    if (b) b.style.display = "flex";
+  }, 3000);
+});
+
+var installBtn = document.getElementById("pwa-install");
+var dismissBtn = document.getElementById("pwa-dismiss");
+
+if (installBtn) {
+  installBtn.addEventListener("click", function() {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(function() {
+      deferredPrompt = null;
+      var b = document.getElementById("pwa-banner");
+      if (b) b.style.display = "none";
+    });
+  });
+}
+
+if (dismissBtn) {
+  dismissBtn.addEventListener("click", function() {
+    var b = document.getElementById("pwa-banner");
+    if (b) b.style.display = "none";
+  });
+}
+
+window.addEventListener("appinstalled", function() {
+  var b = document.getElementById("pwa-banner");
+  if (b) b.style.display = "none";
+});
+
+// iOS Safari install hint
+var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+var isStandalone = window.navigator.standalone === true;
+if (isIOS && !isStandalone && !localStorage.getItem("ios-hint")) {
+  setTimeout(function() {
+    var hint = document.createElement("div");
+    hint.id = "ios-hint";
+    hint.style.cssText = "position:fixed;bottom:90px;left:50%;transform:translateX(-50%);width:calc(100% - 32px);max-width:688px;background:#1e1b4b;border:1px solid #6366f1;border-radius:12px;padding:14px 16px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-family:Georgia,serif;";
+    hint.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><div style="display:flex;align-items:center;gap:8px;"><span style="font-size:22px;">⚾</span><span style="font-size:13px;font-weight:700;color:#f8fafc;">Install Catcher\'s Log</span></div><button onclick="document.getElementById(\'ios-hint\').remove();localStorage.setItem(\'ios-hint\',1)" style="background:transparent;border:none;color:#64748b;font-size:22px;cursor:pointer;line-height:1;padding:0;">×</button></div><div style="font-size:12px;color:#94a3b8;line-height:1.7;">Tap <strong style=\'color:#f8fafc;\'>Share ⬆️</strong> then tap <strong style=\'color:#f8fafc;\'>"Add to Home Screen"</strong></div>';
+    document.body.appendChild(hint);
+    localStorage.setItem("ios-hint", "1");
+  }, 3000);
+}
+</script>
+
+<!-- PWA Install Banner (Android/Chrome) -->
+<div id="pwa-banner" style="display:none;position:fixed;bottom:90px;left:50%;transform:translateX(-50%);width:calc(100% - 32px);max-width:688px;background:#1e1b4b;border:1px solid #6366f1;border-radius:12px;padding:14px 16px;z-index:9999;box-shadow:0 8px 32px rgba(0,0,0,0.5);align-items:center;justify-content:space-between;gap:12px;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <span style="font-size:24px;">⚾</span>
+    <div>
+      <div style="font-size:13px;font-weight:700;color:#f8fafc;font-family:Georgia,serif;">Install Catcher's Log</div>
+      <div style="font-size:11px;color:#94a3b8;font-family:Georgia,serif;">Add to your home screen</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;flex-shrink:0;">
+    <button id="pwa-dismiss" style="padding:7px 12px;border-radius:8px;border:1px solid #334155;background:transparent;color:#94a3b8;cursor:pointer;font-size:12px;font-family:Georgia,serif;">Not now</button>
+    <button id="pwa-install" style="padding:7px 14px;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:12px;font-weight:700;font-family:Georgia,serif;">Install</button>
+  </div>
+</div>
+
+</body>
+</html>
